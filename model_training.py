@@ -2,105 +2,81 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import classification_report, confusion_matrix
 import joblib
 
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
-
-# ==========================================
 # 1. โหลดข้อมูล
-# ==========================================
 df = pd.read_csv('bank.csv')
-print(f"จำนวนข้อมูลเริ่มต้น: {len(df)} แถว")
 
-# ==========================================
-# 2. EDA & จัดการ Outlier (หมวด 2: 5 คะแนน)
-# ==========================================
-def remove_outliers_iqr(dataframe, column):
-    Q1 = dataframe[column].quantile(0.25)
-    Q3 = dataframe[column].quantile(0.75)
-    IQR = Q3 - Q1
-    lower_bound = Q1 - 1.5 * IQR
-    upper_bound = Q3 + 1.5 * IQR
-    return dataframe[(dataframe[column] >= lower_bound) & (dataframe[column] <= upper_bound)]
+# --- 📊 ส่วนของ EDA (Exploratory Data Analysis) ---
+print("--- 📋 ข้อมูลเบื้องต้น ---")
+print(df.info())
+print("\n--- 📈 สถิติพื้นฐาน ---")
+print(df.describe())
 
-# ตัด Outlier ของตัวแปร balance และ campaign 
-# (เหตุผล: ป้องกันโมเดลเรียนรู้จากลูกค้า VIP ที่เงินเยอะผิดปกติ หรือเคสที่ถูกโทรตื๊อมากเกินไป)
-df_clean = remove_outliers_iqr(df, 'balance')
-df_clean = remove_outliers_iqr(df_clean, 'campaign')
-print(f"จำนวนข้อมูลหลังตัด Outlier: {len(df_clean)} แถว")
+# ตรวจสอบว่า target column ชื่ออะไร (มักเป็น 'deposit' หรือ 'y')
+target_col = 'deposit' if 'deposit' in df.columns else 'y'
 
-# ตัด Data Leakage ทิ้ง
-# (เหตุผล: เราจะไม่รู้ระยะเวลาคุยสาย 'duration' ก่อนที่จะโทรหาลูกค้าจริง)
-df_clean = df_clean.drop(columns=['duration'])
+# สร้างกราฟวิเคราะห์ (จะเซฟเป็นไฟล์รูปภาพ)
+plt.figure(figsize=(10, 5))
+sns.countplot(x=target_col, data=df, palette='viridis')
+plt.title('Distribution of Bank Deposit (Target)')
+plt.savefig('target_distribution.png')
+print("\n✅ เซฟกราฟการกระจายของเป้าหมายที่ 'target_distribution.png'")
 
-# ==========================================
-# 3. เตรียมข้อมูล Train/Test และ Data Pipeline
-# ==========================================
-X = df_clean.drop('deposit', axis=1)
-y = df_clean['deposit'].map({'yes': 1, 'no': 0}) # แปลง Target เป็น 1, 0
+# ดูความสัมพันธ์ของอายุและยอดเงินต่อการเปิดบัญชี
+plt.figure(figsize=(12, 6))
+sns.scatterplot(x='age', y='balance', hue=target_col, data=df, alpha=0.5)
+plt.title('Age vs Balance by Deposit Status')
+plt.savefig('age_balance_analysis.png')
+print("✅ เซฟกราฟวิเคราะห์ Age vs Balance ที่ 'age_balance_analysis.png'")
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+# --- ⚙️ การเตรียมข้อมูลสำหรับ Model ---
+# กำหนดคอลัมน์ที่จะใช้ทำนาย (เลือกเฉพาะที่หน้าเว็บจะรับค่า)
+feature_cols = [
+    'age', 'job', 'marital', 'education', 'default', 'balance',
+    'housing', 'loan', 'contact', 'day', 'month', 'campaign',
+    'pdays', 'previous', 'poutcome'
+]
 
-# กำหนดกลุ่มตัวแปร (เหลือ 15 ตัวแปร)
-numeric_features = ['age', 'balance', 'day', 'campaign', 'pdays', 'previous']
-categorical_features = ['job', 'marital', 'education', 'default', 'housing', 'loan', 'contact', 'month', 'poutcome']
+X = df[feature_cols]
+y = df[target_col].apply(lambda x: 1 if x == 'yes' else 0) # แปลงเป็น 0, 1
 
-# สร้าง Pipeline
-numeric_transformer = Pipeline(steps=[('scaler', StandardScaler())])
-categorical_transformer = Pipeline(steps=[('onehot', OneHotEncoder(handle_unknown='ignore'))])
+# แบ่งประเภทคอลัมน์
+categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
+numerical_cols = X.select_dtypes(exclude=['object']).columns.tolist()
 
+# 2. สร้างตัวจัดการข้อมูล (Transformer)
 preprocessor = ColumnTransformer(
     transformers=[
-        ('num', numeric_transformer, numeric_features),
-        ('cat', categorical_transformer, categorical_features)
+        ('num', StandardScaler(), numerical_cols),
+        ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_cols)
     ])
 
-# ==========================================
-# 4. Model Training & Hyperparameter Tuning (หมวด 3: 5 คะแนน)
-# ==========================================
-# ใช้ Random Forest และจัดการ Imbalanced Data ด้วย class_weight='balanced'
-rf_pipeline = Pipeline(steps=[
+# 3. สร้าง Pipeline (รวมการแปลงข้อมูล + โมเดล)
+# การใช้ Pipeline จะแก้ปัญหา KeyError เพราะมันจะจัดการคอลัมน์ให้เราอัตโนมัติ
+model_pipeline = Pipeline(steps=[
     ('preprocessor', preprocessor),
-    ('classifier', RandomForestClassifier(class_weight='balanced', random_state=42))
+    ('classifier', RandomForestClassifier(n_estimators=60, random_state=42))
 ])
 
-# หาพารามิเตอร์ที่ดีที่สุด (ใช้ cv=5 และประเมินด้วย f1-score)
-param_grid = {
-    'classifier__n_estimators': [100, 200],
-    'classifier__max_depth': [10, 15, None]
-}
+# 4. แบ่งข้อมูลเทรนและทดสอบ
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-print("\nกำลังเทรนและจูนโมเดล (อาจใช้เวลาสักครู่)...")
-grid_search = GridSearchCV(rf_pipeline, param_grid, cv=5, scoring='f1', n_jobs=-1)
-grid_search.fit(X_train, y_train)
+# 5. เทรนโมเดล
+print("\n⏳ กำลังเทรนโมเดล Pipeline...")
+model_pipeline.fit(X_train, y_train)
 
-best_model = grid_search.best_estimator_
-print(f"พารามิเตอร์ที่ดีที่สุด: {grid_search.best_params_}")
-
-# ==========================================
-# 5. ประเมินผล (Evaluation)
-# ==========================================
-y_pred = best_model.predict(X_test)
-
-print("\n=== Classification Report ===")
+# 6. ประเมินผล
+y_pred = model_pipeline.predict(X_test)
+print("\n--- 📊 Performance Report ---")
 print(classification_report(y_test, y_pred))
 
-# แสดง Confusion Matrix
-cm = confusion_matrix(y_test, y_pred)
-disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['No Deposit (0)', 'Deposit (1)'])
-fig, ax = plt.subplots(figsize=(5, 4))
-disp.plot(cmap='Blues', ax=ax, values_format='d')
-plt.title('Confusion Matrix on Test Set')
-plt.grid(False)
-plt.show()
-
-# ==========================================
-# 6. บันทึกโมเดล (Save Model)
-# ==========================================
-joblib.dump(best_model, 'bank_deposit_model.pkl')
-print("\n✅ บันทึกโมเดล 'bank_deposit_model.pkl' เรียบร้อยแล้ว! นำไปใช้ทำ Web App ได้เลย")
+# 7. บันทึกโมเดล Pipeline
+joblib.dump(model_pipeline, 'bank_deposit_pipeline.pkl')
+print("\n✅ บันทึกโมเดล 'bank_deposit_pipeline.pkl' เรียบร้อย!")
