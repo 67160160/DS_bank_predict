@@ -76,22 +76,12 @@ with col3:
 # ==========================================
 # 5. สร้าง DataFrame เพื่อส่งให้โมเดลทำนาย
 # ==========================================
+# เตรียมข้อมูลเป็น DataFrame (บังคับให้เป็น 2 มิติด้วยการใส่ [ ] ครอบตัวแปร)
 input_data = pd.DataFrame({
-    'age': [age],
-    'job': [job],
-    'marital': [marital],
-    'education': [education],
-    'default': [default],
-    'balance': [balance],
-    'housing': [housing],
-    'loan': [loan],
-    'contact': [contact],
-    'day': [day],
-    'month': [month],
-    'campaign': [campaign],
-    'pdays': [pdays],
-    'previous': [previous],
-    'poutcome': [poutcome]
+    'age': [age], 'job': [job], 'marital': [marital], 'education': [education],
+    'default': [default], 'balance': [balance], 'housing': [housing], 'loan': [loan],
+    'contact': [contact], 'day': [day], 'month': [month], 'campaign': [campaign],
+    'pdays': [pdays], 'previous': [previous], 'poutcome': [poutcome]
 })
 
 st.markdown("---")
